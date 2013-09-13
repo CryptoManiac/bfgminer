@@ -214,6 +214,9 @@ bool opt_worktime;
 #ifdef USE_AVALON
 char *opt_avalon_options = NULL;
 #endif
+#ifdef USE_BITFURY
+char *opt_bitfury_clockbits = NULL;
+#endif
 
 char *opt_kernel_path;
 char *cgminer_path;
@@ -1313,6 +1316,15 @@ static char *set_avalon_options(const char *arg)
 }
 #endif
 
+#ifdef USE_BITFURY
+static char *set_bitfury_clockbits(const char *arg)
+{
+	opt_set_charp(arg, &opt_bitfury_clockbits);
+
+	return NULL;
+}
+#endif
+
 __maybe_unused
 static char *set_null(const char __maybe_unused *arg)
 {
@@ -1560,6 +1572,13 @@ static struct opt_table opt_config_table[] = {
 		     set_avalon_options, NULL, NULL,
 		     opt_hidden),
 #endif
+
+#ifdef USE_BITFURY
+	OPT_WITH_ARG("--bitfury-clockbits",
+		     set_bitfury_clockbits, NULL, NULL,
+		     "Set bitfury clockbits options chip:bits,chip:bits,..."),
+#endif
+
 	OPT_WITHOUT_ARG("--load-balance",
 		     set_loadbalance, &pool_strategy,
 		     "Change multipool strategy from failover to efficiency based balance"),
@@ -9499,13 +9518,7 @@ void drv_detect_all()
 	if (!opt_scrypt)
 	{
 		bitfury_drv.drv_detect();
-		metabank_drv.drv_detect();
 	}
-#endif
-
-#ifdef USE_LITTLEFURY
-	if (!opt_scrypt)
-		littlefury_drv.drv_detect();
 #endif
 
 	/* Detect avalon last since it will try to claim the device regardless

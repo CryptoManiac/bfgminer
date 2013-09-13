@@ -441,26 +441,6 @@ fi
 AM_CONDITIONAL([HAS_BITFURY], [test x$bitfury = xyes])
 
 
-littlefury=auto
-AC_ARG_ENABLE([littlefury],
-	[AC_HELP_STRING([--disable-littlefury],[Compile support for LittleFury (default enabled)])],
-	[littlefury=$enableval]
-	)
-if test "x$littlefury" = "xno"; then
-	true
-elif test "x$bitfury" = "xyes"; then
-	littlefury=yes
-elif test "x$littlefury" = "xyes"; then
-	AC_MSG_ERROR([You explicitly disabled Bitfury and explicitly enabled LittleFury])
-else
-	littlefury=no
-fi
-if test "x$littlefury" = "xyes"; then
-	AC_DEFINE([USE_LITTLEFURY], [1], [Defined to 1 if LittleFury support is wanted])
-fi
-AM_CONDITIONAL([HAS_LITTLEFURY], [test x$littlefury = xyes])
-
-
 if test "x$x6500$ztex" = "xnono"; then
 	libusb=no
 	LIBUSB_LIBS=''

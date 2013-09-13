@@ -1,6 +1,8 @@
-/*
- * Copyright 2013 bitfury
- * Copyright 2013 legkodymov
+/**
+ * libbitfury.c - library for Bitfury chip/board
+ *
+ * Copyright (c) 2013 bitfury
+ * Copyright (c) 2013 legkodymov
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -19,18 +21,17 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
- */
+ *
+**/
 
 #include "config.h"
 
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 
-#include "logging.h"
 #include "miner.h"
+#include "tm_i2c.h"
 #include "libbitfury.h"
 
 #include "spidevc.h"
@@ -41,27 +42,35 @@
 #define BITFURY_REFRESH_DELAY 100
 #define BITFURY_DETECT_TRIES 3000 / BITFURY_REFRESH_DELAY
 
+// 0 .... 31 bit
+// 1000 0011 0101 0110 1001 1010 1100 0111
+
+// 1100 0001 0110 1010 0101 1001 1110 0011
+// C16A59E3
+
+unsigned char enaconf[4] = { 0xc1, 0x6a, 0x59, 0xe3 };
+unsigned char disconf[4] = { 0, 0, 0, 0 };
+
 unsigned decnonce(unsigned in);
 
 /* Configuration registers - control oscillators and such stuff. PROGRAMMED when magic number is matches, UNPROGRAMMED (default) otherwise */
-void config_reg(struct spi_port *port, int cfgreg, int ena)
+void config_reg(int cfgreg, int ena)
 {
-	static const uint8_t enaconf[4] = { 0xc1, 0x6a, 0x59, 0xe3 };
-	static const uint8_t disconf[4] = { 0, 0, 0, 0 };
-	
-	if (ena) spi_emit_data(port, 0x7000+cfgreg*32, enaconf, 4);
-	else     spi_emit_data(port, 0x7000+cfgreg*32, disconf, 4);
+	if (ena) spi_emit_data(0x7000+cfgreg*32, (void*)enaconf, 4);
+	else     spi_emit_data(0x7000+cfgreg*32, (void*)disconf, 4);
 }
 
 #define FIRST_BASE 61
 #define SECOND_BASE 4
-const int8_t counters[16] = { 64, 64,
+char counters[16] = { 64, 64,
 	SECOND_BASE, SECOND_BASE+4, SECOND_BASE+2, SECOND_BASE+2+16, SECOND_BASE, SECOND_BASE+1,
 	(FIRST_BASE)%65,  (FIRST_BASE+1)%65,  (FIRST_BASE+3)%65, (FIRST_BASE+3+16)%65, (FIRST_BASE+4)%65, (FIRST_BASE+4+4)%65, (FIRST_BASE+3+3)%65, (FIRST_BASE+3+1+3)%65};
 
 //char counters[16] = { 64, 64,
 //	SECOND_BASE, SECOND_BASE+4, SECOND_BASE+2, SECOND_BASE+2+16, SECOND_BASE, SECOND_BASE+1,
 //	(FIRST_BASE)%65,  (FIRST_BASE+1)%65,  (FIRST_BASE+3)%65, (FIRST_BASE+3+16)%65, (FIRST_BASE+4)%65, (FIRST_BASE+4+4)%65, (FIRST_BASE+3+3)%65, (FIRST_BASE+3+1+3)%65};
+char *buf = "Hello, World!\x55\xaa";
+char outbuf[16];
 
 /* Oscillator setup variants (maybe more), values inside of chip ANDed to not allow by programming errors work it at higher speeds  */
 /* WARNING! no chip temperature control limits, etc. It may self-fry and make fried chips with great ease :-) So if trying to overclock */
@@ -69,6 +78,30 @@ const int8_t counters[16] = { 64, 64,
 /* Thermal runaway in this case could produce nice flames of chippy fries */
 
 // Thermometer code from left to right - more ones ==> faster clock!
+
+/* Test vectors to calculate (using address-translated loads) */
+unsigned atrvec[] = {
+0xb0e72d8e, 0x1dc5b862, 0xe9e7c4a6, 0x3050f1f5, 0x8a1a6b7e, 0x7ec384e8, 0x42c1c3fc, 0x8ed158a1, /* MIDSTATE */
+0,0,0,0,0,0,0,0,
+0x8a0bb7b7, 0x33af304f, 0x0b290c1a, 0xf0c4e61f, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
+
+0x9c4dfdc0, 0xf055c9e1, 0xe60f079d, 0xeeada6da, 0xd459883d, 0xd8049a9d, 0xd49f9a96, 0x15972fed, /* MIDSTATE */
+0,0,0,0,0,0,0,0,
+0x048b2528, 0x7acb2d4f, 0x0b290c1a, 0xbe00084a, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
+
+0x0317b3ea, 0x1d227d06, 0x3cca281e, 0xa6d0b9da, 0x1a359fe2, 0xa7287e27, 0x8b79c296, 0xc4d88274, /* MIDSTATE */
+0,0,0,0,0,0,0,0,
+0x328bcd4f, 0x75462d4f, 0x0b290c1a, 0x002c6dbc, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
+
+0xac4e38b6, 0xba0e3b3b, 0x649ad6f8, 0xf72e4c02, 0x93be06fb, 0x366d1126, 0xf4aae554, 0x4ff19c5b, /* MIDSTATE */
+0,0,0,0,0,0,0,0,
+0x72698140, 0x3bd62b4f, 0x3fd40c1a, 0x801e43e9, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
+
+0x9dbf91c9, 0x12e5066c, 0xf4184b87, 0x8060bc4d, 0x18f9c115, 0xf589d551, 0x0f7f18ae, 0x885aca59, /* MIDSTATE */
+0,0,0,0,0,0,0,0,
+0x6f3806c3, 0x41f82a4f, 0x3fd40c1a, 0x00334b39, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
+
+};
 
 #define rotrFixed(x,y) (((x) >> (y)) | ((x) << (32-(y))))
 #define s0(x) (rotrFixed(x,7)^rotrFixed(x,18)^(x>>3))
@@ -89,6 +122,10 @@ static const unsigned SHA_K[64] = {
         0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
         0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 };
+
+void t_print(struct timespec d_time) {
+	printf(" %ds %.2fms\n", (int)d_time.tv_sec, (double)d_time.tv_nsec / 1000000.0);
+}
 
 
 
@@ -137,18 +174,15 @@ void ms3_compute(unsigned *p)
 	p[15] = a; p[14] = b; p[13] = c; p[12] = d; p[11] = e; p[10] = f; p[9] = g; p[8] = h;
 }
 
-void send_conf(struct spi_port *port) {
-	int i;
-	for (i = 7; i <= 11; ++i)
-		config_reg(port, i, 0);
-	config_reg(port, 6, 0); /* disable OUTSLK */
-	config_reg(port, 4, 1); /* Enable slow oscillator */
-	for (i = 1; i <= 3; ++i)
-		config_reg(port, i, 0);
-	spi_emit_data(port, 0x0100, counters, 16); /* Program counters correctly for rounds processing, here baby should start consuming power */
+void send_conf() {
+	config_reg(7,0); config_reg(8,0); config_reg(9,0); config_reg(10,0); config_reg(11,0);
+	config_reg(6,0); /* disable OUTSLK */
+	config_reg(4,1); /* Enable slow oscillator */
+	config_reg(1,0); config_reg(2,0); config_reg(3,0);
+	spi_emit_data(0x0100, (void*)counters, 16); /* Program counters correctly for rounds processing, here baby should start consuming power */
 }
 
-void send_init(struct spi_port *port) {
+void send_init() {
 	/* Prepare internal buffers */
 	/* PREPARE BUFFERS (INITIAL PROGRAMMING) */
 	unsigned w[16];
@@ -160,47 +194,55 @@ void send_init(struct spi_port *port) {
 
 	ms3_compute(&atrvec[0]);
 	memset(&w, 0, sizeof(w)); w[3] = 0xffffffff; w[4] = 0x80000000; w[15] = 0x00000280;
-	spi_emit_data(port, 0x1000, w, 16*4);
-	spi_emit_data(port, 0x1400, w,  8*4);
+	spi_emit_data(0x1000, (void*)w, 16*4);
+	spi_emit_data(0x1400, (void*)w,  8*4);
 	memset(w, 0, sizeof(w)); w[0] = 0x80000000; w[7] = 0x100;
-	spi_emit_data(port, 0x1900, &w[0],8*4); /* Prepare MS and W buffers! */
-	spi_emit_data(port, 0x3000, &atrvec[0], 19*4);
+	spi_emit_data(0x1900, (void*)&w[0],8*4); /* Prepare MS and W buffers! */
+	spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
 }
 
-void set_freq(struct spi_port *port, int bits) {
+void set_freq(int bits) {
 	uint64_t freq;
-	const uint8_t *
+	unsigned char *osc6;
+	int i;
+
 	osc6 = (unsigned char *)&freq;
 	freq = (1ULL << bits) - 1ULL;
 
-	spi_emit_data(port, 0x6000, osc6, 8); /* Program internal on-die slow oscillator frequency */
-	config_reg(port, 4, 1); /* Enable slow oscillator */
+	spi_emit_data(0x6000, (void*)osc6, 8); /* Program internal on-die slow oscillator frequency */
+	config_reg(4,1); /* Enable slow oscillator */
 }
 
-void send_reinit(struct spi_port *port, int slot, int chip_n, int n) {
-	spi_clear_buf(port);
-	spi_emit_break(port);
-	spi_emit_fasync(port, chip_n);
-	set_freq(port, n);
-	send_conf(port);
-	send_init(port);
-	spi_txrx(port);
+void send_reinit(int slot, int chip_n, int n) {
+	spi_clear_buf();
+	spi_emit_break();
+	spi_emit_fasync(chip_n);
+	set_freq(n);
+	send_conf();
+	send_init();
+	tm_i2c_set_oe(slot);
+	spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
+	tm_i2c_clear_oe(slot);
 }
 
-void send_shutdown(struct spi_port *port, int slot, int chip_n) {
-	spi_clear_buf(port);
-	spi_emit_break(port);
-	spi_emit_fasync(port, chip_n);
-	config_reg(port, 4, 0); /* Disable slow oscillator */
-	spi_txrx(port);
+void send_shutdown(int slot, int chip_n) {
+	spi_clear_buf();
+	spi_emit_break();
+	spi_emit_fasync(chip_n);
+	config_reg(4,0); /* Disable slow oscillator */
+	tm_i2c_set_oe(slot);
+	spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
+	tm_i2c_clear_oe(slot);
 }
 
-void send_freq(struct spi_port *port, int slot, int chip_n, int bits) {
-	spi_clear_buf(port);
-	spi_emit_break(port);
-	spi_emit_fasync(port, chip_n);
-	set_freq(port, bits);
-	spi_txrx(port);
+void send_freq(int slot, int chip_n, int bits) {
+	spi_clear_buf();
+	spi_emit_break();
+	spi_emit_fasync(chip_n);
+	set_freq(bits);
+	tm_i2c_set_oe(slot);
+	spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
+	tm_i2c_clear_oe(slot);
 }
 
 unsigned int c_diff(unsigned ocounter, unsigned counter) {
@@ -209,9 +251,10 @@ unsigned int c_diff(unsigned ocounter, unsigned counter) {
 
 int get_counter(unsigned int *newbuf, unsigned int *oldbuf) {
 	int j;
+	unsigned counter;
 	for(j = 0; j < 16; j++) {
 		if (newbuf[j] != oldbuf[j]) {
-			unsigned counter = decnonce(newbuf[j]);
+			int counter = decnonce(newbuf[j]);
 			if ((counter & 0xFFC00000) == 0xdf800000) {
 				counter -= 0xdf800000;
 				return counter;
@@ -221,72 +264,62 @@ int get_counter(unsigned int *newbuf, unsigned int *oldbuf) {
 	return 0;
 }
 
-int detect_chip(struct spi_port *port, int chip_n) {
-	/* Test vectors to calculate (using address-translated loads) */
-	unsigned atrvec[] = {
-		0xb0e72d8e, 0x1dc5b862, 0xe9e7c4a6, 0x3050f1f5, 0x8a1a6b7e, 0x7ec384e8, 0x42c1c3fc, 0x8ed158a1, /* MIDSTATE */
-		0,0,0,0,0,0,0,0,
-		0x8a0bb7b7, 0x33af304f, 0x0b290c1a, 0xf0c4e61f, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
-		
-		0x9c4dfdc0, 0xf055c9e1, 0xe60f079d, 0xeeada6da, 0xd459883d, 0xd8049a9d, 0xd49f9a96, 0x15972fed, /* MIDSTATE */
-		0,0,0,0,0,0,0,0,
-		0x048b2528, 0x7acb2d4f, 0x0b290c1a, 0xbe00084a, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
-		
-		0x0317b3ea, 0x1d227d06, 0x3cca281e, 0xa6d0b9da, 0x1a359fe2, 0xa7287e27, 0x8b79c296, 0xc4d88274, /* MIDSTATE */
-		0,0,0,0,0,0,0,0,
-		0x328bcd4f, 0x75462d4f, 0x0b290c1a, 0x002c6dbc, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
-		
-		0xac4e38b6, 0xba0e3b3b, 0x649ad6f8, 0xf72e4c02, 0x93be06fb, 0x366d1126, 0xf4aae554, 0x4ff19c5b, /* MIDSTATE */
-		0,0,0,0,0,0,0,0,
-		0x72698140, 0x3bd62b4f, 0x3fd40c1a, 0x801e43e9, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
-		
-		0x9dbf91c9, 0x12e5066c, 0xf4184b87, 0x8060bc4d, 0x18f9c115, 0xf589d551, 0x0f7f18ae, 0x885aca59, /* MIDSTATE */
-		0,0,0,0,0,0,0,0,
-		0x6f3806c3, 0x41f82a4f, 0x3fd40c1a, 0x00334b39, /* WDATA: hashMerleRoot[7], nTime, nBits, nNonce */
-	};
+int get_diff(unsigned int *newbuf, unsigned int *oldbuf) {
+		int j;
+		unsigned counter = 0;
+		for(j = 0; j < 16; j++) {
+				if (newbuf[j] != oldbuf[j]) {
+						counter++;
+				}
+		}
+		return counter;
+}
+
+int detect_chip(int chip_n) {
 	int i;
 	unsigned newbuf[17], oldbuf[17];
 	unsigned ocounter;
-	int odiff = 0;
-	struct timespec t1;
+	int odiff;
+	struct timespec t1, t2, td;
 
 	memset(newbuf, 0, 17 * 4);
 	memset(oldbuf, 0, 17 * 4);
 
-	ms3_compute(&atrvec[0]);
-	ms3_compute(&atrvec[20]);
-	ms3_compute(&atrvec[40]);
 
-
-	spi_clear_buf(port);
-	spi_emit_break(port); /* First we want to break chain! Otherwise we'll get all of traffic bounced to output */
-	spi_emit_fasync(port, chip_n);
-	set_freq(port, 52);  //54 - 3F, 53 - 1F
-	send_conf(port);
-	send_init(port);
-	spi_txrx(port);
+	spi_clear_buf();
+	spi_emit_break(); /* First we want to break chain! Otherwise we'll get all of traffic bounced to output */
+	spi_emit_fasync(chip_n);
+	set_freq(52);  //54 - 3F, 53 - 1F
+	send_conf();
+	send_init();
+	spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
 
 	ocounter = 0;
 	for (i = 0; i < BITFURY_DETECT_TRIES; i++) {
+		int j;
 		int counter;
 
-		spi_clear_buf(port);
-		spi_emit_break(port);
-		spi_emit_fasync(port, chip_n);
-		spi_emit_data(port, 0x3000, &atrvec[0], 19*4);
-		spi_txrx(port);
-		memcpy(newbuf, spi_getrxbuf(port) + 4 + chip_n, 17*4);
+		spi_clear_buf();
+		spi_emit_break();
+		spi_emit_fasync(chip_n);
+		spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
+		spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
+		memcpy(newbuf, spi_getrxbuf() + 4 + chip_n, 17*4);
 
 		clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
 		counter = get_counter(newbuf, oldbuf);
 		if (ocounter) {
 			unsigned int cdiff = c_diff(ocounter, counter);
+			unsigned per_ms;
 
+			td = t_diff(t2, t1);
+			per_ms = cdiff / (td.tv_nsec / 1000);
 			if (cdiff > 5000 && cdiff < 100000 && odiff > 5000 && odiff < 100000)
 				return 1;
 			odiff = cdiff;
 		}
 		ocounter = counter;
+		t2 = t1;
 		if (newbuf[16] != 0 && newbuf[16] != 0xFFFFFFFF) {
 			return 0;
 		}
@@ -296,14 +329,64 @@ int detect_chip(struct spi_port *port, int chip_n) {
 	return 0;
 }
 
-int libbitfury_detectChips1(struct spi_port *port) {
-	int n;
-	for (n = 0; detect_chip(port, n); ++n)
-	{}
+int libbitfury_detectChips(struct bitfury_device *devices) {
+	int n = 0;
+	int i;
+	static int slot_on[BITFURY_MAXBANKS];
+	struct timespec t1, t2;
+
+	if (tm_i2c_init() < 0) {
+		printf("I2C init error\n");
+		return(1);
+	}
+
+	ms3_compute(&atrvec[0]);
+	ms3_compute(&atrvec[20]);
+	ms3_compute(&atrvec[40]);
+	spi_init();
+
+	for (i = 0; i < BITFURY_MAXBANKS; i++) {
+		slot_on[i] = 0;
+	}
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
+	for (i = 0; i < BITFURY_MAXBANKS; i++) {
+		int slot_detected = tm_i2c_detect(i) != -1;
+		slot_on[i] = slot_detected;
+		tm_i2c_clear_oe(i);
+		cgsleep_ms(1);
+	}
+
+	for (i = 0; i < BITFURY_MAXBANKS; i++) {
+		int chip_n = 0;
+		int chip_detected;
+		tm_i2c_set_oe(i);
+		do {
+			chip_detected = detect_chip(chip_n);
+			if (chip_detected) {
+				applog(LOG_WARNING, "BFY slot: %d, chip #%d detected", i, n);
+				devices[n].slot = i;
+				devices[n].fasync = chip_n;
+				n++;
+				chip_n++;
+			}
+		} while (chip_detected);
+		tm_i2c_clear_oe(i);
+	}
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
+
 	return n;
 }
 
-// in  = 1f 1e 1d 1c 1b 1a 19 18 17 16 15 14 13 12 11 10  f  e  d  c  b  a  9  8  7  6  5  4  3  2  1  0
+int libbitfury_shutdownChips(struct bitfury_device *devices, int chip_n) {
+	int i;
+	for (i = 0; i < chip_n; i++) {
+		send_shutdown(devices[i].slot, devices[i].fasync);
+	}
+	tm_i2c_close();
+}
+
 unsigned decnonce(unsigned in)
 {
 	unsigned out;
@@ -321,7 +404,6 @@ unsigned decnonce(unsigned in)
 	/* Extraction */
 	if (in & 1) out |= (1 << 23);
 	if (in & 2) out |= (1 << 22);
-// out =  7  6  5  4  3  2  1  0  f  e 18 19 1a 1b 1c 1d 1e 1f 10 11 12 13 14 15 16 17  8  9  a  b  c  d
 
 	out -= 0x800004;
 	return out;
@@ -369,24 +451,6 @@ int rehash(const void *midstate, const uint32_t m7, const uint32_t ntime, const 
 	return 0;
 }
 
-static
-bool fudge_nonce(const void *midstate, const uint32_t m7, const uint32_t ntime, const uint32_t nbits, uint32_t *nonce_p) {
-	static const uint32_t offsets[] = {0, 0xffc00000, 0xff800000, 0x02800000, 0x02C00000, 0x00400000};
-	uint32_t nonce;
-	int i;
-	
-	for (i = 0; i < 6; ++i)
-	{
-		nonce = *nonce_p + offsets[i];
-		if (rehash(midstate, m7, ntime, nbits, nonce))
-		{
-			*nonce_p = nonce;
-			return true;
-		}
-	}
-	return false;
-}
-
 void work_to_payload(struct bitfury_payload *p, struct work *w) {
 	unsigned char flipped_data[80];
 
@@ -399,206 +463,254 @@ void work_to_payload(struct bitfury_payload *p, struct work *w) {
 	p->nbits = bswap_32(*(unsigned *)(flipped_data + 72));
 }
 
-void payload_to_atrvec(uint32_t *atrvec, struct bitfury_payload *p)
-{
-	/* Programming next value */
-	memcpy(atrvec, p, 20*4);
-	ms3_compute(atrvec);
-}
+void libbitfury_sendHashData(struct thr_info *thr, struct bitfury_device *bf, int chip_n) {
+	int chip_id;
+	int buf_diff;
+	static unsigned second_run;
 
-void libbitfury_sendHashData1(int chip_id, struct bitfury_device *d, struct thr_info *thr)
-{
-	struct spi_port *port = d->spi;
-	unsigned *newbuf = d->newbuf;
-	unsigned *oldbuf = d->oldbuf;
-	struct bitfury_payload *p = &(d->payload);
-	struct bitfury_payload *op = &(d->opayload);
-	struct bitfury_payload *o2p = &(d->o2payload);
-	struct timespec d_time;
-	struct timespec time;
-	int smart = 0;
-	int chip = d->fasync;
-
-	clock_gettime(CLOCK_REALTIME, &(time));
-
-	if (!d->second_run) {
-		d->predict2 = d->predict1 = time;
-		d->counter1 = d->counter2 = 0;
-		d->req2_done = 0;
-	};
-
-	d_time = t_diff(time, d->predict1);
-	if (d_time.tv_sec < 0 && (d->req2_done || !smart)) {
-		d->otimer1 = d->timer1;
-		d->timer1 = time;
-		/* Programming next value */
-		spi_clear_buf(port);
-		spi_emit_break(port);
-		spi_emit_fasync(port, chip);
-		spi_emit_data(port, 0x3000, &d->atrvec[0], 19*4);
-		if (smart) {
-			config_reg(port, 3, 0);
-		}
-		clock_gettime(CLOCK_REALTIME, &(time));
-		d_time = t_diff(time, d->predict1);
-		spi_txrx(port);
-		memcpy(newbuf, spi_getrxbuf(port)+4 + chip, 17*4);
-
-		d->job_switched = newbuf[16] != oldbuf[16];
-
+	for (chip_id = 0; chip_id < chip_n; chip_id++) {
+		unsigned char *hexstr;
+		struct bitfury_device *d = bf + chip_id;
+		unsigned *newbuf = d->newbuf;
+		unsigned *oldbuf = d->oldbuf;
+		struct bitfury_payload *p = &(d->payload);
+		struct bitfury_payload *op = &(d->opayload);
+		struct bitfury_payload *o2p = &(d->o2payload);
+		struct timespec d_time;
+		struct timespec time;
+		int smart = 0;
 		int i;
-		int results_num = 0;
-		int found = 0;
-		unsigned * results = d->results;
+		int chip = d->fasync;
+		int slot = d->slot;
 
-		d->old_nonce = 0;
-		d->future_nonce = 0;
-		for (i = 0; i < 16; i++) {
-			if (oldbuf[i] != newbuf[i] && op && o2p) {
-				uint32_t pn;  // possible nonce
-				if ((newbuf[i] & 0xFF) == 0xE0)
-					continue;
-				pn = decnonce(newbuf[i]);
-				if (fudge_nonce(op->midstate, op->m7, op->ntime, op->nbits, &pn))
-				{
-					int k;
-					int dup = 0;
-					for (k = 0; k < results_num; k++) {
-						if (results[k] == bswap_32(pn))
-							dup = 1;
-					}
-					if (!dup) {
-						results[results_num++] = bswap_32(pn);
+		memcpy(atrvec, p, 20*4);
+		ms3_compute(atrvec);
+
+		clock_gettime(CLOCK_REALTIME, &(time));
+
+		if (!second_run) {
+			d->predict2 = d->predict1 = time;
+			d->counter1 = d->counter2 = 0;
+			d->req2_done = 0;
+		};
+
+		d_time = t_diff(time, d->predict1);
+		if (d_time.tv_sec < 0 && (d->req2_done || !smart)) {
+			d->otimer1 = d->timer1;
+			d->timer1 = time;
+			d->ocounter1 = d->counter1;
+			if (d->osc6_bits != d->osc6_req) {
+                          send_freq(d->slot, d->fasync, d->osc6_req);
+                          d->osc6_bits = d->osc6_req;
+                        }
+			/* Programming next value */
+			tm_i2c_set_oe(slot);
+			spi_clear_buf(); spi_emit_break();
+			spi_emit_fasync(chip);
+			spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
+			if (smart) {
+				config_reg(3,0);
+			}
+			clock_gettime(CLOCK_REALTIME, &(time));
+			d_time = t_diff(time, d->predict1);
+			spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
+			memcpy(newbuf, spi_getrxbuf()+4 + chip, 17*4);
+			d->counter1 = get_counter(newbuf, oldbuf);
+			buf_diff = get_diff(newbuf, oldbuf);
+			if (buf_diff > 4 || (d->counter1 > 0 && d->counter1 < 0x00400000 / 2)) {
+				if (buf_diff > 4) {
+//					printf("AAA        chip_id: %d, buf_diff: %d, counter: %08x\n", chip_id, buf_diff, d->counter1);
+					memcpy(atrvec, p, 20*4);
+					ms3_compute(atrvec);
+					spi_clear_buf(); spi_emit_break();
+					spi_emit_fasync(chip);
+					spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
+					clock_gettime(CLOCK_REALTIME, &(time));
+					d_time = t_diff(time, d->predict1);
+					spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
+					memcpy(newbuf, spi_getrxbuf()+4 + chip, 17*4);
+					buf_diff = get_diff(newbuf, oldbuf);
+					d->counter1 = get_counter(newbuf, oldbuf);
+//					printf("AAA _222__ chip_id: %d, buf_diff: %d, counter: %08x\n", chip_id, buf_diff, d->counter1);
+				}
+			}
+
+			tm_i2c_clear_oe(slot);
+
+			d->job_switched = newbuf[16] != oldbuf[16];
+
+			int i;
+			int results_num = 0;
+			int found = 0;
+			unsigned * results = d->results;
+
+			d->old_nonce = 0;
+			d->future_nonce = 0;
+			for (i = 0; i < 16; i++) {
+				if (oldbuf[i] != newbuf[i] && op && o2p) {
+					unsigned pn; //possible nonce
+					unsigned int s = 0; //TODO zero may be solution
+					unsigned int old_f = 0;
+					if ((newbuf[i] & 0xFF) == 0xE0)
+						continue;
+					pn = decnonce(newbuf[i]);
+					if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn)) s = pn;
+					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00400000)) s = pn - 0x00400000;
+					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn-0x00800000)) s = pn - 0x00800000;
+					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02800000)) s = pn + 0x02800000;
+					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
+					else if(rehash(op->midstate, op->m7, op->ntime, op->nbits, pn+0x00400000)) s = pn + 0x00400000;
+					if (s) {
+						results[results_num++] = bswap_32(s);
 						found++;
 					}
-				}
-				else
-				if (fudge_nonce(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, &pn))
-				{
-					d->old_nonce = bswap_32(pn);
-					found++;
-				}
-				else
-				if (fudge_nonce(p->midstate, p->m7, p->ntime, p->nbits, &pn))
-				{
-					d->future_nonce = bswap_32(pn);
-					found++;
-				}
-				if (!found) {
-					inc_hw_errors2(thr, NULL, &pn);
+
+					s = 0;
+					pn = decnonce(newbuf[i]);
+					if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn)) s = pn;
+					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00400000)) s = pn - 0x00400000;
+					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn-0x00800000)) s = pn - 0x00800000;
+					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02800000)) s = pn + 0x02800000;
+					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
+					else if(rehash(o2p->midstate, o2p->m7, o2p->ntime, o2p->nbits, pn+0x00400000)) s = pn + 0x00400000;
+					if (s) {
+						d->old_nonce = bswap_32(s);
+						found++;
+					}
+
+					s = 0;
+					pn = decnonce(newbuf[i]);
+					if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn)) s = pn;
+					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00400000)) s = pn - 0x00400000;
+					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn-0x00800000)) s = pn - 0x00800000;
+					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02800000)) s = pn + 0x02800000;
+					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x02C00000)) s = pn + 0x02C00000;
+					else if(rehash(p->midstate, p->m7, p->ntime, p->nbits, pn+0x00400000)) s = pn + 0x00400000;
+					if (s) {
+						d->future_nonce = bswap_32(s);
+						found++;
+					}
+					if (!found) {
+						//printf("AAA Strange: %08x, chip_id: %d\n", pn, chip_id);
+						d->hw_errors++;
+						inc_hw_errors2(thr, NULL, &pn);
+					}
 				}
 			}
-		}
-		d->results_n = results_num;
+			d->results_n = results_num;
 
-		if (smart) {
-			d_time = t_diff(d->timer2, d->timer1);
-		} else {
-			d_time = t_diff(d->otimer1, d->timer1);
-		}
-		d->ocounter1 = d->counter1;
-		d->counter1 = get_counter(newbuf, oldbuf);
-		if (d->counter2 || !smart) {
-			int shift;
-			int cycles;
-			int req1_cycles;
-			long long unsigned int period;
-			double ns;
-			unsigned full_cycles, half_cycles;
-			double full_delay, half_delay;
-			long long unsigned delta;
-			struct timespec t_delta;
-			double mhz;
-			int ccase;
-
-			shift = 800000;
 			if (smart) {
-				cycles = d->counter1 < d->counter2 ? 0x00400000 - d->counter2 + d->counter1 : d->counter1 - d->counter2; // + 0x003FFFFF;
+				d_time = t_diff(d->timer2, d->timer1);
 			} else {
-				if (d->counter1 > (0x00400000 - shift * 2) && d->ocounter1 > (0x00400000 - shift)) {
-					cycles = 0x00400000 - d->ocounter1 + d->counter1; // + 0x003FFFFF;
-					ccase = 1;
+				d_time = t_diff(d->otimer1, d->timer1);
+			}
+			d->counter1 = get_counter(newbuf, oldbuf);
+			if (d->counter2 || !smart) {
+				int shift;
+				int cycles;
+				int req1_cycles;
+				long long unsigned int period;
+				double ns;
+				unsigned full_cycles, half_cycles;
+				double full_delay, half_delay;
+				long long unsigned delta;
+				struct timespec t_delta;
+				double mhz;
+				int ccase;
+
+				shift = 800000;
+				if (smart) {
+					cycles = d->counter1 < d->counter2 ? 0x00400000 - d->counter2 + d->counter1 : d->counter1 - d->counter2; // + 0x003FFFFF;
 				} else {
-					cycles = d->counter1 - d->ocounter1;
-					ccase = 2;
+					if (d->counter1 > (0x00400000 - shift * 2) && d->ocounter1 > (0x00400000 - shift)) {
+						cycles = 0x00400000 - d->ocounter1 + d->counter1; // + 0x003FFFFF;
+						ccase = 1;
+					} else {
+						cycles = d->counter1 > d->ocounter1 ? d->counter1 - d->ocounter1 : 0x00400000 - d->ocounter1 + d->counter1;
+						ccase = 2;
+					}
 				}
-			}
-			req1_cycles = 0x003FFFFF - d->counter1;
-			period = (long long unsigned int)d_time.tv_sec * 1000000000ULL + (long long unsigned int)d_time.tv_nsec;
-			ns = (double)period / (double)(cycles);
-			mhz = 1.0 / ns * 65.0 * 1000.0;
+				req1_cycles = 0x003FFFFF - d->counter1;
+				period = (long long unsigned int)d_time.tv_sec * 1000000000ULL + (long long unsigned int)d_time.tv_nsec;
+				ns = (double)period / (double)(cycles);
+				mhz = 1.0 / ns * 65.0 * 1000.0;
 
-			if (d->counter1 > 0 && d->counter1 < 0x001FFFFF)
-				applog(LOG_DEBUG, "AAA chip_id %2d: %llu ms, req1_cycles: %08u,  counter1: %08d, ocounter1: %08d, counter2: %08d, cycles: %08d, ns: %.2f, mhz: %.2f ", chip_id, period / 1000000ULL, req1_cycles, d->counter1, d->ocounter1, d->counter2, cycles, ns, mhz);
-			if (ns > 2000.0 || ns < 20) {
-				applog(LOG_DEBUG, "AAA %d!Stupid ns chip_id %2d: %llu ms, req1_cycles: %08u,  counter1: %08d, ocounter1: %08d, counter2: %08d, cycles: %08d, ns: %.2f, mhz: %.2f ", ccase, chip_id, period / 1000000ULL, req1_cycles, d->counter1, d->ocounter1, d->counter2, cycles, ns, mhz);
-				ns = 200.0;
-			} else {
-				d->ns = ns;
-				d->mhz = mhz;
+				if (d->counter1 > 0 && d->counter1 < 0x001FFFFF) {
+					//printf("//AAA chip_id %2d: %llu ms, req1_cycles: %08u,  counter1: %08d, ocounter1: %08d, counter2: %08d, cycles: %08d, ns: %.2f, mhz: %.2f \n", chip_id, period / 1000000ULL, req1_cycles, d->counter1, d->ocounter1, d->counter2, cycles, ns, mhz);
+				}
+				if (ns > 2000.0 || ns < 20) {
+					//printf("AAA %d!Stupid ns chip_id %2d: %llu ms, req1_cycles: %08u,  counter1: %08d, ocounter1: %08d, counter2: %08d, cycles: %08d, ns: %.2f, mhz: %.2f \n", ccase, chip_id, period / 1000000ULL, req1_cycles, d->counter1, d->ocounter1, d->counter2, cycles, ns, mhz);
+					ns = 200.0;
+				} else {
+					d->ns = ns;
+					d->mhz = mhz;
+				}
+
+				if (smart) {
+					half_cycles = req1_cycles + shift;
+					full_cycles = 0x003FFFFF - 2 * shift;
+				} else {
+					half_cycles = 0;
+					full_cycles = req1_cycles > shift ? req1_cycles - shift : req1_cycles + 0x00400000 - shift;
+				}
+				half_delay = (double)half_cycles * ns * (1 +0.92);
+				full_delay = (double)full_cycles * ns;
+				delta = (long long unsigned)(full_delay + half_delay);
+				t_delta.tv_sec = delta / 1000000000ULL;
+				t_delta.tv_nsec = delta - t_delta.tv_sec * 1000000000ULL;
+				d->predict1 = t_add(time, t_delta);
+
+				if (smart) {
+					half_cycles = req1_cycles + shift;
+					full_cycles = 0;
+				} else {
+					full_cycles = req1_cycles + shift;
+				}
+				half_delay = (double)half_cycles * ns * (1 + 0.92);
+				full_delay = (double)full_cycles * ns;
+				delta = (long long unsigned)(full_delay + half_delay);
+
+				t_delta.tv_sec = delta / 1000000000ULL;
+				t_delta.tv_nsec = delta - t_delta.tv_sec * 1000000000ULL;
+				d->predict2 = t_add(time, t_delta);
+				d->req2_done = 0; d->req1_done = 0;
 			}
 
-			if (smart) {
-				half_cycles = req1_cycles + shift;
-				full_cycles = 0x003FFFFF - 2 * shift;
-			} else {
-				half_cycles = 0;
-				full_cycles = req1_cycles > shift ? req1_cycles - shift : req1_cycles + 0x00400000 - shift;
+			if (d->job_switched) {
+				memcpy(o2p, op, sizeof(struct bitfury_payload));
+				memcpy(op, p, sizeof(struct bitfury_payload));
+				memcpy(oldbuf, newbuf, 17 * 4);
 			}
-			half_delay = (double)half_cycles * ns * (1 +0.92);
-			full_delay = (double)full_cycles * ns;
-			delta = (long long unsigned)(full_delay + half_delay);
-			t_delta.tv_sec = delta / 1000000000ULL;
-			t_delta.tv_nsec = delta - t_delta.tv_sec * 1000000000ULL;
-			d->predict1 = t_add(time, t_delta);
-
-			if (smart) {
-				half_cycles = req1_cycles + shift;
-				full_cycles = 0;
-			} else {
-				full_cycles = req1_cycles + shift;
-			}
-			half_delay = (double)half_cycles * ns * (1 + 0.92);
-			full_delay = (double)full_cycles * ns;
-			delta = (long long unsigned)(full_delay + half_delay);
-
-			t_delta.tv_sec = delta / 1000000000ULL;
-			t_delta.tv_nsec = delta - t_delta.tv_sec * 1000000000ULL;
-			d->predict2 = t_add(time, t_delta);
-			d->req2_done = 0; d->req1_done = 0;
 		}
 
-		if (d->job_switched) {
-			memcpy(o2p, op, sizeof(struct bitfury_payload));
-			memcpy(op, p, sizeof(struct bitfury_payload));
-			memcpy(oldbuf, newbuf, 17 * 4);
+		clock_gettime(CLOCK_REALTIME, &(time));
+		d_time = t_diff(time, d->predict2);
+		if (d_time.tv_sec < 0 && !d->req2_done) {
+			if(smart) {
+				d->otimer2 = d->timer2;
+				d->timer2 = time;
+				spi_clear_buf();
+				spi_emit_break();
+				spi_emit_fasync(chip);
+				spi_emit_data(0x3000, (void*)&atrvec[0], 19*4);
+				if (smart) {
+					config_reg(3,1);
+				}
+				tm_i2c_set_oe(slot);
+				spi_txrx(spi_gettxbuf(), spi_getrxbuf(), spi_getbufsz());
+				tm_i2c_clear_oe(slot);
+				memcpy(newbuf, spi_getrxbuf()+4 + chip, 17*4);
+				d->counter2 = get_counter(newbuf, oldbuf);
+
+				d->req2_done = 1;
+			} else {
+				d->req2_done = 1;
+			}
 		}
 	}
+	second_run = 1;
 
-	clock_gettime(CLOCK_REALTIME, &(time));
-	d_time = t_diff(time, d->predict2);
-	if (d_time.tv_sec < 0 && !d->req2_done) {
-		if(smart) {
-			d->otimer2 = d->timer2;
-			d->timer2 = time;
-			spi_clear_buf(port);
-			spi_emit_break(port);
-			spi_emit_fasync(port, chip);
-			spi_emit_data(port, 0x3000, &d->atrvec[0], 19*4);
-			if (smart) {
-				config_reg(port, 3, 1);
-			}
-			spi_txrx(port);
-			memcpy(newbuf, spi_getrxbuf(port)+4 + chip, 17*4);
-			d->counter2 = get_counter(newbuf, oldbuf);
-
-			d->req2_done = 1;
-		} else {
-			d->req2_done = 1;
-		}
-	}
-	
-	d->second_run = true;
+	return;
 }
 
 int libbitfury_readHashData(unsigned int *res) {
